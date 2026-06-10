@@ -1,0 +1,24 @@
+# Learning Disability Detection System - Requirements
+# Child-Friendly, Accessible Design
+# Python 3.8+ recommended
+
+# Web Framework
+streamlit==1.31.0
+
+# Deep Learning
+torch==2.1.2
+torchvision==0.16.2
+
+# Image Processing
+Pillow==10.2.0
+opencv-python==4.9.0.80
+
+# Data Handling & Analytics
+numpy==1.26.3
+pandas==2.1.4
+
+# Database
+# SQLite is built-in with Python
+
+# Utilities
+python-dateutil==2.8.2
