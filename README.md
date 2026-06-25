@@ -31,7 +31,6 @@ The system is designed around two principles:
 - [Machine Learning Models](#machine-learning-models)
 - [Database & Analytics](#database--analytics)
 - [Accessibility & UX](#accessibility--ux)
-- [Known Limitations](#known-limitations)
 - [Documentation](#documentation)
 - [Disclaimer](#disclaimer)
 
