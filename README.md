@@ -415,20 +415,6 @@ Key API surface: `database/db_handler.py` → `DatabaseHandler`
 
 ---
 
-## Known Limitations
-
-### Transformation invariance (handwriting models)
-
-When models correctly classify real handwriting, they often misclassify **reversed or transformed** versions of the same letters. Tuning for reversed letters can degrade performance on normal samples. The models tend to rely on low-level visual cues (orientation, stroke direction, pixel layout) rather than transformation-invariant dyslexia-related writing patterns.
-
-### Scope of the system
-
-- This is a **research / graduation prototype**, not a clinical diagnostic tool.
-- Cognitive games provide **practice and screening signals**, not formal neuropsychological assessment.
-- Single-device SQLite storage — not designed for multi-tenant cloud deployment without modification.
-
----
-
 ## Documentation
 
 | Document | Description |
