@@ -390,8 +390,6 @@ Training is documented in [Training Notebooks](#training-notebooks). Label mappi
 Upload → EXIF correction → Grayscale → Resize / pad → Normalize → Model → Softmax → Child-safe label
 ```
 
----
-
 ## Database & Analytics
 
 - **Engine:** SQLite (`database/learning_support.db`)
