@@ -781,6 +781,82 @@ class DatabaseHandler:
         conn.close()
         return rows
 
+    def get_scores_by_child_and_activity(self, child_id: str, activity_name: str,
+                                         limit: int = 100) -> List[Dict[str, Any]]:
+        """Return chart-ready score history for one child and one activity."""
+        activity_queries = {
+            "attention": """
+                SELECT created_at AS timestamp, accuracy * 100.0 AS score,
+                       accuracy, target_letter, correct_clicks, total_targets,
+                       time_spent_seconds, NULL AS difficulty, result_id
+                FROM attention_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+            "visual_memory": """
+                SELECT created_at AS timestamp, correct_answers AS score,
+                       accuracy, difficulty_level AS difficulty, grid_size,
+                       correct_answers, total_questions, time_spent_seconds, result_id
+                FROM visual_memory_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+            "auditory_memory": """
+                SELECT created_at AS timestamp, correct_rounds AS score,
+                       accuracy, difficulty_level AS difficulty, max_span_reached,
+                       correct_rounds, total_rounds, time_spent_seconds, result_id
+                FROM auditory_memory_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+            "working_memory": """
+                SELECT created_at AS timestamp, max_span_reached AS score,
+                       accuracy, mode AS difficulty, span_length, correct_trials,
+                       total_trials, time_spent_seconds, result_id
+                FROM working_memory_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+            "processing_speed": """
+                SELECT created_at AS timestamp,
+                       CASE
+                           WHEN accuracy IS NOT NULL THEN accuracy * 100.0
+                           ELSE NULL
+                       END AS score,
+                       accuracy, avg_reaction_ms, difficulty_level AS difficulty,
+                       task_type, correct_trials, total_trials,
+                       time_spent_seconds, result_id
+                FROM processing_speed_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+            "final_assessment": """
+                SELECT created_at AS timestamp, overall_score AS score,
+                       overall_score, attention_score, visual_memory_score,
+                       auditory_memory_score, working_memory_score,
+                       processing_speed_score, time_spent_seconds, result_id
+                FROM final_assessment_results
+                WHERE user_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """,
+        }
+        query = activity_queries.get(activity_name)
+        if not query:
+            return []
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, (child_id, limit))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
     def delete_final_assessment_result(self, result_id: int) -> bool:
         conn = self._get_connection()
         cursor = conn.cursor()

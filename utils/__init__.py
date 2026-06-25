@@ -1,6 +1,4 @@
 # Utilities package for Learning Disability Detection System
-# Contains helper functions for image processing, session management, and logging
+# Import submodules directly, e.g. from utils.image_processing import ImageProcessor
 
-from .image_processing import ImageProcessor
-from .session_manager import SessionManager
-from .logger import get_logger
+__all__ = ["image_processing", "session_manager", "logger", "auth", "theme", "audio"]

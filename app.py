@@ -11,7 +11,7 @@ import os
 import uuid
 import random
 import re
-import hmac
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,6 +29,45 @@ logger = get_logger("app")
 ANONYMOUS_NAME_RE = re.compile(r"^Friend[-_]\d{3,6}$", re.IGNORECASE)
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "Teacher@123"
+
+EXERCISE_CHARTS = {
+    "attention": {
+        "name": "Attention & Focus",
+        "metric": "Focus Score (%)",
+        "color": "#2E86DE",
+        "normalize": lambda row: row.get("score"),
+    },
+    "visual_memory": {
+        "name": "Visual Memory",
+        "metric": "Memory Score",
+        "color": "#8E44AD",
+        "normalize": lambda row: (row.get("accuracy") or 0) * 100 if row.get("accuracy") is not None else None,
+    },
+    "auditory_memory": {
+        "name": "Auditory Memory",
+        "metric": "Rounds Remembered",
+        "color": "#16A085",
+        "normalize": lambda row: (row.get("accuracy") or 0) * 100 if row.get("accuracy") is not None else None,
+    },
+    "working_memory": {
+        "name": "Working Memory",
+        "metric": "Max Sequence Length",
+        "color": "#E67E22",
+        "normalize": lambda row: (row.get("accuracy") or 0) * 100 if row.get("accuracy") is not None else None,
+    },
+    "processing_speed": {
+        "name": "Processing Speed",
+        "metric": "Speed Score (%)",
+        "color": "#C0392B",
+        "normalize": lambda row: row.get("score"),
+    },
+    "final_assessment": {
+        "name": "Final Assessment",
+        "metric": "Total Score",
+        "color": "#34495E",
+        "normalize": lambda row: row.get("score"),
+    },
+}
 
 
 def _generate_anon_name(existing_names: list[str]) -> str:
@@ -75,15 +114,14 @@ def show_teacher_login():
     expected_username, expected_password = get_admin_credentials()
 
     with st.form("teacher_login_form"):
-        username = st.text_input("Username", placeholder="admin")
+        username = st.text_input("Username", placeholder=" ")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login", use_container_width=True)
 
     if submitted:
-        username_ok = hmac.compare_digest(username.strip(), expected_username)
-        password_ok = hmac.compare_digest(password, expected_password)
+        from utils.auth import verify_teacher_credentials
 
-        if username_ok and password_ok:
+        if verify_teacher_credentials(username, password, expected_username, expected_password):
             st.session_state.teacher_authenticated = True
             st.success("Login successful. Opening Teacher/Parent dashboard...")
             st.rerun()
@@ -605,6 +643,188 @@ def show_child_home():
     """, unsafe_allow_html=True)
 
 
+def _format_chart_time(value):
+    """Format database timestamps for chart labels."""
+    if not value:
+        return "—"
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%b %d, %Y")
+    except ValueError:
+        return str(value)[:16]
+
+
+def _load_child_activity_histories(db, user_id):
+    return {
+        key: db.get_scores_by_child_and_activity(user_id, key, limit=100)
+        for key in EXERCISE_CHARTS
+    }
+
+
+def _history_to_chart_frame(history, config):
+    import pandas as pd
+
+    df = pd.DataFrame(history)
+    if df.empty:
+        return df
+    df["Date"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.sort_values("Date").reset_index(drop=True)
+    df["Session"] = range(1, len(df) + 1)
+    df["Score"] = pd.to_numeric(df["score"], errors="coerce")
+    df["Normalized"] = df.apply(config["normalize"], axis=1)
+    df["Normalized"] = pd.to_numeric(df["Normalized"], errors="coerce").clip(lower=0, upper=100)
+    if len(df) >= 3:
+        df["Moving Average"] = df["Score"].rolling(window=3, min_periods=1).mean()
+    return df
+
+
+def _style_plotly_figure(fig, title, subtitle=None):
+    fig.update_layout(
+        title={"text": f"{title}<br><sup>{subtitle or ''}</sup>", "x": 0.02, "xanchor": "left"},
+        font={"family": "Arial, sans-serif", "size": 14, "color": "#263238"},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"l": 20, "r": 20, "t": 72, "b": 35},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="rgba(38,50,56,0.12)")
+    return fig
+
+
+def _render_overall_progress_chart(child_name, histories):
+    import pandas as pd
+    import plotly.graph_objects as go
+
+    rows = []
+    for key, config in EXERCISE_CHARTS.items():
+        df = _history_to_chart_frame(histories.get(key, []), config)
+        latest = df.dropna(subset=["Date"]).tail(1) if not df.empty else df
+        if not latest.empty:
+            row = latest.iloc[0]
+            progress_value = row.get("Normalized")
+            rows.append({
+                "Exercise": config["name"],
+                "Progress": progress_value if pd.notna(progress_value) else 0,
+                "Label": f"{progress_value:.0f}%" if pd.notna(progress_value) else "—",
+                "Last updated": _format_chart_time(row.get("timestamp")),
+                "Color": config["color"] if pd.notna(progress_value) else "#B0B7C3",
+            })
+        else:
+            rows.append({
+                "Exercise": config["name"],
+                "Progress": 0,
+                "Label": "—",
+                "Last updated": "—",
+                "Color": "#B0B7C3",
+            })
+
+    df = pd.DataFrame(rows)
+    fig = go.Figure()
+    fig.add_bar(
+        x=df["Exercise"],
+        y=df["Progress"],
+        text=df["Label"],
+        textposition="outside",
+        marker_color=df["Color"],
+        hovertemplate="<b>%{x}</b><br>Progress: %{text}<br>Last updated: %{customdata}<extra></extra>",
+        customdata=df["Last updated"],
+    )
+    fig.update_yaxes(range=[0, 105], title="Progress scale (0-100%)")
+    fig.update_xaxes(title=None)
+    _style_plotly_figure(fig, f"Overall Progress — {child_name}", "Latest available score for each activity")
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(
+        df[["Exercise", "Label", "Last updated"]].rename(columns={"Label": "Latest score"}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _render_exercise_chart(activity_key, history):
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    config = EXERCISE_CHARTS[activity_key]
+    if not history:
+        st.info("No sessions recorded yet for this activity.")
+        return
+
+    df = _history_to_chart_frame(history, config)
+    if df.empty or df["Score"].dropna().empty:
+        st.info("No sessions recorded yet for this activity.")
+        return
+
+    attempts = len(df)
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Progress over time", "Session scores"),
+        horizontal_spacing=0.12,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df["Date"],
+            y=df["Score"],
+            mode="lines+markers",
+            name=config["metric"],
+            line={"color": config["color"], "width": 3},
+            marker={"size": 8},
+            hovertemplate="%{x|%b %d, %Y}<br>Score: %{y:.1f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    if "Moving Average" in df:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"],
+                y=df["Moving Average"],
+                mode="lines",
+                name="3-session trend",
+                line={"color": "#5D6D7E", "width": 2, "dash": "dash"},
+                hovertemplate="%{x|%b %d, %Y}<br>Trend: %{y:.1f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if activity_key == "visual_memory" and "difficulty" in df:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"],
+                y=df["Score"],
+                mode="text",
+                name="Difficulty",
+                text=df["difficulty"].fillna(""),
+                textposition="top center",
+                textfont={"color": "#5D6D7E", "size": 12},
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_trace(
+        go.Bar(
+            x=[f"Session {n}" for n in df["Session"]],
+            y=df["Score"],
+            name="Session score",
+            marker_color=config["color"],
+            hovertemplate="%{x}<br>Score: %{y:.1f}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.update_yaxes(title_text=config["metric"], row=1, col=1)
+    fig.update_yaxes(title_text=config["metric"], row=1, col=2)
+    fig.update_xaxes(title_text="Date", row=1, col=1)
+    fig.update_xaxes(title_text="Session", row=1, col=2)
+    _style_plotly_figure(
+        fig,
+        f"{config['name']} — Score Over Time",
+        f"{attempts} attempt{'s' if attempts != 1 else ''} recorded",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def show_teacher_home():
     """Teacher/Parent dashboard: show child name, age, last activity; select from list."""
     st.markdown('<div class="teacher-header"><h2>👨‍🏫 Teacher/Parent Dashboard</h2></div>', 
@@ -772,7 +992,16 @@ def show_teacher_home():
     
     st.divider()
 
-    # Make the 8-tab bar horizontally scrollable so every tab remains
+    try:
+        activity_histories = _load_child_activity_histories(db, user_id)
+    except Exception:
+        st.warning("Could not load chart data. Please refresh the page.")
+        activity_histories = {key: [] for key in EXERCISE_CHARTS}
+
+    if not any(activity_histories.values()):
+        st.info(f"🌱 {child_name} hasn't completed any activities yet. Encourage them to try their first exercise!")
+
+    # Make the dashboard tab bar horizontally scrollable so every tab remains
     # accessible on narrow screens / when zoomed in. Only injected here
     # because show_teacher_home() runs on the dashboard route only —
     # the per-exercise pages execute their own scripts and aren't affected.
@@ -805,19 +1034,21 @@ def show_teacher_home():
         """,
         unsafe_allow_html=True,
     )
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "📊 Progress Overview",
-        "🎯 Attention Results",
-        "🧩 Memory Results",
-        "📝 Classification History",
-        "🔊 Auditory Memory",
-        "🔢 Working Memory",
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📊 Overview",
+        "🎯 Attention & Focus",
+        "👁 Visual Memory",
+        "👂 Auditory Memory",
+        "🧠 Working Memory",
         "⚡ Processing Speed",
-        "🏆 Final Assessments",
+        "📝 Final Assessment",
     ])
     
     with tab1:
-        st.subheader("Overall Progress")
+        st.subheader("Overview")
+        _render_overall_progress_chart(child_name, activity_histories)
+        st.divider()
+        st.subheader("Activity Summary")
         
         col1, col2 = st.columns(2)
         
@@ -852,6 +1083,8 @@ def show_teacher_home():
     
     with tab2:
         st.subheader("Attention & Focus Session History")
+        _render_exercise_chart("attention", activity_histories.get("attention", []))
+        st.markdown("#### Raw sessions")
         st.caption("Teachers/Parents: You can delete individual old records below.")
         
         attention_history = db.get_attention_history(user_id, limit=50)
@@ -890,6 +1123,8 @@ def show_teacher_home():
     
     with tab3:
         st.subheader("Visual Memory Session History")
+        _render_exercise_chart("visual_memory", activity_histories.get("visual_memory", []))
+        st.markdown("#### Raw sessions")
         st.caption("Teachers/Parents: You can delete individual old records below.")
         
         memory_history = db.get_visual_memory_history(user_id, limit=50)
@@ -927,45 +1162,13 @@ def show_teacher_home():
             st.info("No memory sessions recorded yet.")
     
     with tab4:
-        st.subheader("Handwriting Classification History")
-        st.caption("Teachers/Parents: You can delete individual old records below.")
-        
-        classification_history = db.get_classification_history(user_id, limit=50)
-        
-        if classification_history:
-            import pandas as pd
-            
-            for rec in classification_history:
-                rid = rec.get("result_id")
-                created = rec.get("created_at", "")[:16] if rec.get("created_at") else ""
-                conf = rec.get("confidence")
-                conf_str = f"{conf * 100:.1f}%" if conf is not None else "—"
-                row1, row2 = st.columns([4, 1])
-                with row1:
-                    st.write(f"**{created}** — Model: {rec.get('model_used', '—')} | {rec.get('predicted_label', '—')} | Confidence: {conf_str}")
-                with row2:
-                    if st.button("🗑️ Delete", key=f"del_class_{rid}", type="secondary", use_container_width=True):
-                        db.delete_classification_result(rid)
-                        st.success("Record deleted.")
-                        st.rerun()
-            st.divider()
-            df = pd.DataFrame(classification_history)
-            df['confidence'] = df['confidence'].apply(lambda x: f"{x * 100:.1f}%" if x is not None else "—")
-            df['created_at'] = pd.to_datetime(df['created_at'])
-            st.dataframe(
-                df[['created_at', 'model_used', 'predicted_label', 'confidence']].rename(columns={
-                    'created_at': 'Date', 'model_used': 'Model',
-                    'predicted_label': 'Result', 'confidence': 'Confidence'
-                }),
-                use_container_width=True, hide_index=True
-            )
-        else:
-            st.info("No classification results yet.")
-
-    with tab5:
         st.subheader("Auditory Memory History")
+        _render_exercise_chart("auditory_memory", activity_histories.get("auditory_memory", []))
+        st.markdown("#### Raw sessions")
         history = db.get_auditory_memory_history(user_id, limit=50)
         if history:
+            import pandas as pd
+
             for rec in history:
                 rid = rec.get("result_id")
                 created = rec.get("created_at", "")[:16] if rec.get("created_at") else ""
@@ -984,13 +1187,31 @@ def show_teacher_home():
                                  type="secondary", use_container_width=True):
                         db.delete_auditory_memory_result(rid)
                         st.rerun()
+            st.divider()
+            df = pd.DataFrame(history)
+            df['accuracy'] = df['accuracy'].apply(lambda x: f"{x * 100:.1f}%" if x is not None else "—")
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            st.dataframe(
+                df[['created_at', 'difficulty_level', 'max_span_reached', 'correct_rounds',
+                    'total_rounds', 'accuracy', 'time_spent_seconds']].rename(columns={
+                    'created_at': 'Date', 'difficulty_level': 'Difficulty',
+                    'max_span_reached': 'Max Sequence', 'correct_rounds': 'Correct',
+                    'total_rounds': 'Rounds', 'accuracy': 'Accuracy',
+                    'time_spent_seconds': 'Time (s)'
+                }),
+                use_container_width=True, hide_index=True
+            )
         else:
             st.info("No auditory memory sessions yet.")
 
-    with tab6:
+    with tab5:
         st.subheader("Working Memory (Digit Span) History")
+        _render_exercise_chart("working_memory", activity_histories.get("working_memory", []))
+        st.markdown("#### Raw sessions")
         history = db.get_working_memory_history(user_id, limit=50)
         if history:
+            import pandas as pd
+
             for rec in history:
                 rid = rec.get("result_id")
                 created = rec.get("created_at", "")[:16] if rec.get("created_at") else ""
@@ -1009,13 +1230,31 @@ def show_teacher_home():
                                  type="secondary", use_container_width=True):
                         db.delete_working_memory_result(rid)
                         st.rerun()
+            st.divider()
+            df = pd.DataFrame(history)
+            df['accuracy'] = df['accuracy'].apply(lambda x: f"{x * 100:.1f}%" if x is not None else "—")
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            st.dataframe(
+                df[['created_at', 'mode', 'max_span_reached', 'correct_trials',
+                    'total_trials', 'accuracy', 'time_spent_seconds']].rename(columns={
+                    'created_at': 'Date', 'mode': 'Mode',
+                    'max_span_reached': 'Max Sequence', 'correct_trials': 'Correct',
+                    'total_trials': 'Trials', 'accuracy': 'Accuracy',
+                    'time_spent_seconds': 'Time (s)'
+                }),
+                use_container_width=True, hide_index=True
+            )
         else:
             st.info("No working memory sessions yet.")
 
-    with tab7:
+    with tab6:
         st.subheader("Processing Speed History")
+        _render_exercise_chart("processing_speed", activity_histories.get("processing_speed", []))
+        st.markdown("#### Raw sessions")
         history = db.get_processing_speed_history(user_id, limit=50)
         if history:
+            import pandas as pd
+
             for rec in history:
                 rid = rec.get("result_id")
                 created = rec.get("created_at", "")[:16] if rec.get("created_at") else ""
@@ -1035,13 +1274,32 @@ def show_teacher_home():
                                  type="secondary", use_container_width=True):
                         db.delete_processing_speed_result(rid)
                         st.rerun()
+            st.divider()
+            df = pd.DataFrame(history)
+            df['accuracy'] = df['accuracy'].apply(lambda x: f"{x * 100:.1f}%" if x is not None else "—")
+            df['avg_reaction_ms'] = df['avg_reaction_ms'].apply(lambda x: f"{(x or 0)/1000:.2f}s")
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            st.dataframe(
+                df[['created_at', 'task_type', 'difficulty_level', 'correct_trials',
+                    'total_trials', 'accuracy', 'avg_reaction_ms']].rename(columns={
+                    'created_at': 'Date', 'task_type': 'Task',
+                    'difficulty_level': 'Difficulty', 'correct_trials': 'Correct',
+                    'total_trials': 'Trials', 'accuracy': 'Accuracy',
+                    'avg_reaction_ms': 'Avg Reaction'
+                }),
+                use_container_width=True, hide_index=True
+            )
         else:
             st.info("No processing speed sessions yet.")
 
-    with tab8:
+    with tab7:
         st.subheader("Final Assessment Reports")
+        _render_exercise_chart("final_assessment", activity_histories.get("final_assessment", []))
+        st.markdown("#### Raw sessions")
         history = db.get_final_assessment_history(user_id, limit=20)
         if history:
+            import pandas as pd
+
             for rec in history:
                 rid = rec.get("result_id")
                 created = rec.get("created_at", "")[:16] if rec.get("created_at") else ""
@@ -1062,6 +1320,22 @@ def show_teacher_home():
                                  type="secondary", use_container_width=True):
                         db.delete_final_assessment_result(rid)
                         st.rerun()
+            st.divider()
+            df = pd.DataFrame(history)
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            st.dataframe(
+                df[['created_at', 'overall_score', 'attention_score', 'visual_memory_score',
+                    'auditory_memory_score', 'working_memory_score', 'processing_speed_score',
+                    'time_spent_seconds']].rename(columns={
+                    'created_at': 'Date', 'overall_score': 'Total Score',
+                    'attention_score': 'Focus', 'visual_memory_score': 'Visual Memory',
+                    'auditory_memory_score': 'Auditory Memory',
+                    'working_memory_score': 'Working Memory',
+                    'processing_speed_score': 'Processing Speed',
+                    'time_spent_seconds': 'Time (s)'
+                }),
+                use_container_width=True, hide_index=True
+            )
         else:
             st.info("No final assessments yet.")
 
