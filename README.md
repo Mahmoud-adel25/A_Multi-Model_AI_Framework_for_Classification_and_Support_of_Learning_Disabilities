@@ -1,4 +1,4 @@
-# Learning Disability Detection & Support System
+# A Multi-Model AI Framework for Classification and Support of Learning Disabilities
 
 > A child-friendly, accessible multi-model AI platform for handwriting-based screening and adaptive cognitive learning support — built with Streamlit and PyTorch.
 
@@ -26,6 +26,7 @@ The system is designed around two principles:
 - [Configuration](#configuration)
 - [Running the Application](#running-the-application)
 - [Testing & Verification](#testing--verification)
+- [Training Notebooks](#training-notebooks)
 - [Machine Learning Models](#machine-learning-models)
 - [Database & Analytics](#database--analytics)
 - [Accessibility & UX](#accessibility--ux)
@@ -191,8 +192,11 @@ Grad project/
 │   ├── smoke_check.py              # Pre-flight system verification
 │   └── tc_edge_verify.py
 │
-├── Notebooks/                      # Offline model training & evaluation
-├── Paper/                          # Thesis / paper generation scripts
+├── Notebooks/                      # Offline model training (see Training Notebooks)
+│   ├── Final code.ipynb            # Primary training pipeline (CNN + EffNet + MobileNet)
+│   ├── notebookb85375af61.ipynb    # Kaggle run (CNN + EfficientNet-B0)
+│   ├── notebook2f6f077763 (6).ipynb # Kaggle run variant
+│   └── Other/                      # Archived notebook exports (.ipynb duplicates)
 ├── weights/                        # Documentation for weight placement
 ├── assets/                         # Static assets
 └── .streamlit/
@@ -330,6 +334,44 @@ Exit code `0` = all critical checks passed.
 
 ---
 
+## Training Notebooks
+
+The `Notebooks/` folder holds the **offline training phase** of the architecture — everything that produces the `.pth` checkpoints loaded by `models/model_loader.py` at runtime. These notebooks are **not** required to run the Streamlit app; they document how the models were built and can be re-run on Kaggle or a local GPU machine.
+
+### Primary notebook
+
+| Notebook | Role |
+|----------|------|
+| **`Final code.ipynb`** | Canonical end-to-end pipeline. Loads the synthetic handwriting dataset (Normal, Reversed, Corrected folders), combines it with a subset of EMNIST, trains all three architectures, supports checkpoint resume, and evaluates on a held-out test set. **Start here** if you need to reproduce weights or understand label mapping. |
+
+### Kaggle training runs
+
+These are earlier or alternate Kaggle GPU sessions of the same dyslexia-detection pipeline. They overlap with `Final code.ipynb` but may differ in dataset fractions, checkpoint paths, or which models were trained in a given run.
+
+| Notebook | Notes |
+|----------|-------|
+| `notebookb85375af61.ipynb` | Trains **CNN** and **EfficientNet-B0**; includes checkpoint resume and balanced test-set evaluation. |
+| `notebook2f6f077763 (6).ipynb` | Same pipeline family; alternate Kaggle execution with its own model-instance checkpoint. |
+
+Duplicate copies of these notebooks also live under `Notebooks/Other/` for archival reference.
+
+### What the training pipeline does
+
+1. **Data** — Synthetic dyslexia handwriting samples (normal, reversed, corrected letter forms) plus EMNIST augmentation; train/val/test splits with reproducible seed.
+2. **Preprocessing** — Model-specific transforms: 28×28 grayscale for the custom CNN; 224×224 padded grayscale for EfficientNet-B0 and MobileNet V3 Large.
+3. **Training** — Fine-tunes three architectures with checkpoint saving so long Kaggle runs can resume after interruption.
+4. **Evaluation** — Confusion matrices, classification reports, and metric logging on a balanced test set containing both dyslexic and non-dyslexic samples.
+5. **Export** — Saved state dicts are copied into `models/` under the filenames listed in [Installation](#4-add-model-weights).
+
+### Running a notebook
+
+- **Kaggle:** Upload or link the dyslexia + EMNIST datasets referenced in the notebook metadata, enable GPU, and run all cells.
+- **Local:** Install the same PyTorch/torchvision stack as `requirements.txt`, point dataset paths at your local copies of the training folders, and adjust checkpoint directories away from `/kaggle/working/…`.
+
+After training, align exported checkpoints with the names expected by `model_loader.py` (see [Machine Learning Models](#machine-learning-models) for class-label conventions).
+
+---
+
 ## Machine Learning Models
 
 Three architectures classify handwriting as **Non-Dyslexic** vs **Dyslexic** (binary display; CNN internally uses a 3-class head mapped to binary):
@@ -340,7 +382,7 @@ Three architectures classify handwriting as **Non-Dyslexic** vs **Dyslexic** (bi
 | **MobileNet V3 Large** | Grayscale (padded) | 224×224 | Transfer learning with custom classifier head |
 | **EfficientNet-B0** | Grayscale (padded) | 224×224 | Transfer learning with custom classifier head |
 
-Training notebooks live in `Notebooks/` (see `Final code.ipynb`). Label mapping and checkpoint conventions are documented in `models/model_loader.py`.
+Training is documented in [Training Notebooks](#training-notebooks). Label mapping and checkpoint conventions for inference are in `models/model_loader.py`.
 
 ### Inference pipeline
 
